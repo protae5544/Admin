@@ -202,6 +202,5 @@ def index():
 os.makedirs('static', exist_ok=True)
 
 if __name__ == '__main__':
-    # ใช้ PORT จาก environment variable (Render กำหนดให้เป็น 10000)
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)  # ปิด debug mode สำหรับ production
+    app.run(debug=False, host='0.0.0.0', port=port)  # ← debug=False
