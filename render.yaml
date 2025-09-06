@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ocr-app
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    branch: main
+    healthCheckPath: /
+    envVars:
+      - key: TESSDATA_PREFIX
+        value: /usr/share/tesseract-ocr/4.00/tessdata
