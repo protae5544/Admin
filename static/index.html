@@ -4,43 +4,48 @@
     <meta charset="UTF-8">
     <title>Data Extraction App</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f9f9f9; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-        th, td { border: 1px solid #ccc; padding: 12px; text-align: left; vertical-align: top; }
-        th { background-color: #f2f2f2; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; margin-right: 10px; }
-        button:hover { background: #0056b3; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
+        th { background-color: #007bff; color: white; }
+        button { padding: 12px 24px; background: #28a745; color: white; border: none; cursor: pointer; margin-right: 10px; border-radius: 5px; font-weight: bold; }
+        button:hover { background: #218838; }
         button:disabled { background: #ccc; cursor: not-allowed; }
-        #status { margin: 10px 0; font-weight: bold; color: #d9534f; }
-        .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; }
-        .actions { margin: 20px 0; }
+        #status { margin: 20px 0; padding: 10px; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 5px; border: 1px solid #eee; }
+        h1 { color: #333; }
     </style>
 </head>
 <body>
-    <h1>📄 Data Extraction with Thumbnails</h1>
-    <input type="file" id="fileInput" multiple accept="image/*"><br><br>
-    <button id="extractBtn" onclick="extractData()">Extract Data</button>
-    <button id="exportBtn" onclick="exportAsHTML()" disabled>Export as HTML</button>
-    <div id="status"></div>
+    <div class="container">
+        <h1>📄 Smart Data Extraction</h1>
+        <input type="file" id="fileInput" multiple accept="image/*"><br><br>
+        <button id="extractBtn" onclick="extractData()">Extract Data</button>
+        <button id="exportBtn" onclick="exportAsHTML()" disabled>Export as HTML</button>
+        <div id="status"></div>
 
-    <h2>📊 Extracted Data</h2>
-    <table id="dataTable">
-        <thead>
-            <tr>
-                <th>Picture</th> <!-- ✅ คอลัมน์ใหม่ -->
-                <th>ENG_NAME (with prefix)</th>
-                <th>TH_NAME (with prefix)</th>
-                <th>DOB (DD/MM/YYYY)</th>
-                <th>Age</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- Data will be inserted here -->
-        </tbody>
-    </table>
+        <h2>📊 Extracted Data</h2>
+        <table id="dataTable">
+            <thead>
+                <tr>
+                    <th>Picture</th>
+                    <th>Prefix</th>
+                    <th>Name (EN)</th>
+                    <th>DOB (DD/MM/YYYY)</th>
+                    <th>Age</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Data will be inserted here -->
+            </tbody>
+        </table>
+    </div>
 
     <script>
-        let extractedData = []; // เก็บข้อมูลไว้สำหรับ export
+        let extractedData = [];
 
         async function extractData() {
             const fileInput = document.getElementById('fileInput');
@@ -50,11 +55,13 @@
             const files = fileInput.files;
 
             if (files.length === 0) {
+                statusDiv.className = 'error';
                 statusDiv.textContent = "⚠️ Please select at least one image file.";
                 return;
             }
 
             extractBtn.disabled = true;
+            statusDiv.className = '';
             statusDiv.textContent = "⏳ Processing...";
 
             const formData = new FormData();
@@ -68,14 +75,18 @@
                     body: formData,
                 });
 
-                if (!response.ok) throw new Error(`Server error: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                }
 
-                extractedData = await response.json(); // ✅ เก็บข้อมูลไว้
+                extractedData = await response.json();
                 displayData(extractedData);
-                exportBtn.disabled = extractedData.length === 0; // ✅ เปิดปุ่ม export ถ้ามีข้อมูล
+                exportBtn.disabled = extractedData.length === 0;
+                statusDiv.className = 'success';
                 statusDiv.textContent = `✅ Successfully processed ${extractedData.length} file(s).`;
             } catch (error) {
                 console.error("Error:", error);
+                statusDiv.className = 'error';
                 statusDiv.textContent = `❌ Error: ${error.message}`;
             } finally {
                 extractBtn.disabled = false;
@@ -94,7 +105,7 @@
             data.forEach(row => {
                 const tr = document.createElement('tr');
 
-                // ✅ คอลัมน์รูปภาพ
+                // Thumbnail
                 const imgTd = document.createElement('td');
                 if (row.thumbnail) {
                     const img = document.createElement('img');
@@ -106,8 +117,8 @@
                 }
                 tr.appendChild(imgTd);
 
-                // ✅ ข้อมูลอื่นๆ
-                ['engName', 'thName', 'dob', 'age'].forEach(key => {
+                // ข้อมูล
+                ['prefix', 'name', 'dob', 'age'].forEach(key => {
                     const td = document.createElement('td');
                     td.textContent = row[key] || '—';
                     tr.appendChild(td);
@@ -123,8 +134,8 @@
             const rowsHtml = extractedData.map(row => `
                 <tr>
                     <td><img src="data:image/jpeg;base64,${row.thumbnail}" class="thumbnail" alt="Profile"></td>
-                    <td>${escapeHtml(row.engName || '—')}</td>
-                    <td>${escapeHtml(row.thName || '—')}</td>
+                    <td>${escapeHtml(row.prefix || '—')}</td>
+                    <td>${escapeHtml(row.name || '—')}</td>
                     <td>${row.dob || '—'}</td>
                     <td>${row.age || '—'}</td>
                 </tr>
@@ -134,24 +145,26 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Exported Data</title>
+    <title>Exported Data Report</title>
+    <meta charset="UTF-8">
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ccc; padding: 12px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 5px; }
+        h1 { color: #333; }
     </style>
 </head>
 <body>
-    <h1>📊 Extracted Data Report</h1>
-    <p>Generated on: ${new Date().toLocaleString()}</p>
+    <h1>📊 Smart Data Extraction Report</h1>
+    <p><strong>Generated on:</strong> ${new Date().toLocaleString()}</p>
     <table>
         <thead>
             <tr>
                 <th>Picture</th>
-                <th>ENG_NAME (with prefix)</th>
-                <th>TH_NAME (with prefix)</th>
+                <th>Prefix</th>
+                <th>Name (EN)</th>
                 <th>DOB (DD/MM/YYYY)</th>
                 <th>Age</th>
             </tr>
@@ -163,12 +176,11 @@
 </body>
 </html>`;
 
-            // สร้างลิงก์ดาวน์โหลด
             const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'extracted_data_report.html';
+            a.download = 'smart_extraction_report.html';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
