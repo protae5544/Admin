@@ -1,19 +1,13 @@
 from flask import Flask, request, jsonify
 import os
 import tempfile
-import requests
+import pytesseract
 from PIL import Image
 import re
 import logging
 from datetime import datetime
 import base64
 from io import BytesIO
-
-# ==============================
-# 🔑 Typhoon OCR API Key (สำหรับใช้ส่วนตัว)
-# ==============================
-TYHOON_API_KEY = "sk-OZIFoH2FrnRh4QpRSrkt6CLcbuZZ3Scl62DnDf53asOFQiQX"
-TYHOON_API_URL = "https://api.typhoon-ocr.com/v1/recognize"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,23 +68,18 @@ def create_thumbnail_base64(image_path, size=(60, 60)):
         logger.error(f"Error creating thumbnail: {e}")
         return ""
 
-def call_typhoon_ocr(image_path):
-    with open(image_path, 'rb') as image_file:
-        files = {'file': image_file}
-        headers = {
-            'Authorization': f'Bearer {TYHOON_API_KEY}'
-        }
-        try:
-            response = requests.post(TYHOON_API_URL, headers=headers, files=files, timeout=30)
-            response.raise_for_status()
-            result = response.json()
-            return result.get('text', '')
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Typhoon OCR API Error: {str(e)}")
-            raise Exception(f"OCR API failed: {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            raise
+def call_tesseract_ocr(image_path):
+    """
+    ใช้ Tesseract OCR แทน Typhoon OCR
+    """
+    try:
+        img = Image.open(image_path)
+        # ใช้ทั้งภาษาไทยและอังกฤษ
+        text = pytesseract.image_to_string(img, lang='eng+tha')
+        return text
+    except Exception as e:
+        logger.error(f"Tesseract OCR Error: {str(e)}")
+        raise Exception(f"OCR failed: {str(e)}")
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
@@ -113,7 +102,9 @@ def upload_files():
                 file.save(tmp.name)
 
                 thumbnail_b64 = create_thumbnail_base64(tmp.name)
-                ocr_text = call_typhoon_ocr(tmp.name)
+
+                # ✅ เรียก Tesseract OCR แทน Typhoon OCR
+                ocr_text = call_tesseract_ocr(tmp.name)
                 cleaned_text = clean_text(ocr_text)
                 logger.info(f"OCR Output ({file.filename}): {cleaned_text}")
 
@@ -140,7 +131,7 @@ def upload_files():
 def index():
     return app.send_static_file('index.html')
 
-# ✅ สร้างโฟลเดอร์ static ทุกครั้งก่อนรัน app — สำคัญมากสำหรับ deploy!
+# สร้างโฟลเดอร์ static ทุกครั้ง
 os.makedirs('static', exist_ok=True)
 
 if __name__ == '__main__':
