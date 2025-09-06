@@ -62,13 +62,9 @@ def extract_fields(text):
     return results
 
 def create_thumbnail_base64(image_path, size=(60, 60)):
-    """
-    สร้าง thumbnail จากภาพ → แปลงเป็น base64 string
-    """
     try:
         img = Image.open(image_path)
         img.thumbnail(size)
-        # แปลงเป็น RGB ถ้าเป็น RGBA/P ฯลฯ
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         buffered = BytesIO()
@@ -116,10 +112,7 @@ def upload_files():
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
                 file.save(tmp.name)
 
-                # ✅ สร้าง thumbnail base64
                 thumbnail_b64 = create_thumbnail_base64(tmp.name)
-
-                # ✅ เรียก OCR
                 ocr_text = call_typhoon_ocr(tmp.name)
                 cleaned_text = clean_text(ocr_text)
                 logger.info(f"OCR Output ({file.filename}): {cleaned_text}")
@@ -132,7 +125,7 @@ def upload_files():
                     'dob': fields.get('dob', ''),
                     'age': fields.get('age', '—'),
                     'sourceFile': file.filename,
-                    'thumbnail': thumbnail_b64  # ✅ เพิ่ม thumbnail base64
+                    'thumbnail': thumbnail_b64
                 })
 
                 os.unlink(tmp.name)
@@ -147,6 +140,8 @@ def upload_files():
 def index():
     return app.send_static_file('index.html')
 
+# ✅ สร้างโฟลเดอร์ static ทุกครั้งก่อนรัน app — สำคัญมากสำหรับ deploy!
+os.makedirs('static', exist_ok=True)
+
 if __name__ == '__main__':
-    os.makedirs('static', exist_ok=True)
     app.run(debug=True, host='0.0.0.0', port=5000)
