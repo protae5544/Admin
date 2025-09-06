@@ -1,100 +1,65 @@
 from flask import Flask, render_template_string, request, jsonify
 import os
 import logging
-import sys
 import subprocess
+import sys
 from PIL import Image
-import pytesseract
 
 app = Flask(__name__)
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create uploads directory
 os.makedirs('uploads', exist_ok=True)
 
-def setup_tesseract():
-    """Setup and configure Tesseract OCR"""
-    try:
-        # Try to get Tesseract version to check if it's installed
-        version = pytesseract.get_tesseract_version()
-        logger.info(f"Tesseract version detected: {version}")
-        
-        # Try to get available languages
-        try:
-            langs = pytesseract.get_languages()
-            logger.info(f"Available languages: {langs}")
-        except Exception as e:
-            logger.warning(f"Could not get languages: {e}")
-        
-        return True
-        
-    except pytesseract.TesseractNotFoundError:
-        logger.error("Tesseract not found. Attempting to locate...")
-        
-        # Try different common paths
-        possible_paths = [
-            '/usr/bin/tesseract',
-            '/usr/local/bin/tesseract',
-            '/opt/homebrew/bin/tesseract',
-            'C:\\Program Files\\Tesseract-OCR\\tesseract.exe',
-            'C:\\Users\\%USERNAME%\\AppData\\Local\\Tesseract-OCR\\tesseract.exe'
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                pytesseract.pytesseract.tesseract_cmd = path
-                logger.info(f"Tesseract found at: {path}")
-                try:
-                    version = pytesseract.get_tesseract_version()
-                    logger.info(f"Tesseract version: {version}")
-                    return True
-                except:
-                    continue
-        
-        # Try using which command
-        try:
-            result = subprocess.run(['which', 'tesseract'], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                tesseract_path = result.stdout.strip()
-                pytesseract.pytesseract.tesseract_cmd = tesseract_path
-                logger.info(f"Tesseract found via which: {tesseract_path}")
-                return True
-        except Exception as e:
-            logger.warning(f"Could not use 'which' command: {e}")
-        
-        # Try using whereis command
-        try:
-            result = subprocess.run(['whereis', 'tesseract'], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                output = result.stdout.strip()
-                paths = output.split()[1:]  # Skip the first element which is "tesseract:"
-                for path in paths:
-                    if os.path.exists(path) and os.access(path, os.X_OK):
-                        pytesseract.pytesseract.tesseract_cmd = path
-                        logger.info(f"Tesseract found via whereis: {path}")
-                        return True
-        except Exception as e:
-            logger.warning(f"Could not use 'whereis' command: {e}")
-            
-        return False
+# Global variable to store tesseract availability
+TESSERACT_AVAILABLE = False
+pytesseract = None
+
+def check_tesseract():
+    """Check if Tesseract is installed and import pytesseract"""
+    global TESSERACT_AVAILABLE, pytesseract
     
+    try:
+        # First check if tesseract command exists
+        result = subprocess.run(['tesseract', '--version'], 
+                              capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            logger.info(f"Tesseract found: {result.stdout.split()[1] if result.stdout else 'Unknown version'}")
+            
+            # Try to import pytesseract
+            try:
+                import pytesseract as pt
+                pytesseract = pt
+                
+                # Test if we can get languages
+                langs = pytesseract.get_languages()
+                logger.info(f"Available languages: {langs}")
+                
+                TESSERACT_AVAILABLE = True
+                logger.info("✅ Tesseract OCR is ready!")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error importing pytesseract: {e}")
+                
+        else:
+            logger.error("Tesseract command failed")
+            
+    except FileNotFoundError:
+        logger.error("Tesseract command not found")
+    except subprocess.TimeoutExpired:
+        logger.error("Tesseract command timeout")
     except Exception as e:
-        logger.error(f"Unexpected error setting up Tesseract: {e}")
-        return False
+        logger.error(f"Error checking tesseract: {e}")
+    
+    logger.error("❌ Tesseract OCR is not available")
+    return False
 
-# Initialize Tesseract
-TESSERACT_AVAILABLE = setup_tesseract()
-
-if not TESSERACT_AVAILABLE:
-    logger.error("⚠️  Tesseract OCR is not available. OCR functionality will be disabled.")
+# Check tesseract on startup
+check_tesseract()
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -168,16 +133,10 @@ HTML_TEMPLATE = '''
             background: rgba(102, 126, 234, 0.05);
         }
         
-        .upload-area:hover {
+        .upload-area:hover:not(.disabled) {
             border-color: #5a67d8;
             background: rgba(102, 126, 234, 0.1);
             transform: translateY(-2px);
-        }
-        
-        .upload-area.dragover {
-            border-color: #4c51bf;
-            background: rgba(102, 126, 234, 0.15);
-            transform: scale(1.02);
         }
         
         .upload-area.disabled {
@@ -222,7 +181,6 @@ HTML_TEMPLATE = '''
         .upload-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
-            transform: none;
         }
         
         .loading {
@@ -266,18 +224,6 @@ HTML_TEMPLATE = '''
             color: #16a34a;
         }
         
-        .preview-container {
-            margin: 20px 0;
-            text-align: center;
-        }
-        
-        .preview-image {
-            max-width: 100%;
-            max-height: 300px;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-        }
-        
         .ocr-result {
             background: #f8f9fa;
             border: 1px solid #e9ecef;
@@ -289,6 +235,16 @@ HTML_TEMPLATE = '''
             color: #333;
             max-height: 200px;
             overflow-y: auto;
+        }
+        
+        .system-info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            color: #666;
         }
         
         @media (max-width: 768px) {
@@ -311,9 +267,15 @@ HTML_TEMPLATE = '''
     <div class="container">
         <h1>📸 OCR Image Reader</h1>
         
+        <div class="system-info">
+            <strong>System Status:</strong><br>
+            Python: {{ python_version }}<br>
+            Tesseract: {{ tesseract_status }}
+        </div>
+        
         {% if not tesseract_available %}
         <div class="status-banner status-error">
-            ⚠️ OCR ไม่พร้อมใช้งาน: Tesseract ไม่ได้ติดตั้งในระบบ
+            ⚠️ OCR ไม่พร้อมใช้งาน: ต้องติดตั้ง Tesseract OCR ในระบบ
         </div>
         {% else %}
         <div class="status-banner status-success">
@@ -358,7 +320,6 @@ HTML_TEMPLATE = '''
         }
 
         if (tesseractAvailable) {
-            // Drag and drop functionality
             uploadArea.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 uploadArea.classList.add('dragover');
@@ -371,8 +332,7 @@ HTML_TEMPLATE = '''
             uploadArea.addEventListener('drop', (e) => {
                 e.preventDefault();
                 uploadArea.classList.remove('dragover');
-                const files = e.dataTransfer.files;
-                handleFiles(files);
+                handleFiles(e.dataTransfer.files);
             });
 
             fileInput.addEventListener('change', (e) => {
@@ -436,7 +396,7 @@ HTML_TEMPLATE = '''
                 html += '<div class="preview-container">';
                 html += `<h4>📄 ไฟล์: ${item.filename}</h4>`;
                 if (item.success) {
-                    if (item.text.trim()) {
+                    if (item.text && item.text.trim()) {
                         html += '<div class="ocr-result">' + escapeHtml(item.text) + '</div>';
                     } else {
                         html += '<div class="ocr-result">ไม่พบข้อความในภาพนี้</div>';
@@ -470,24 +430,29 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE, tesseract_available=TESSERACT_AVAILABLE)
+    return render_template_string(HTML_TEMPLATE, 
+                                tesseract_available=TESSERACT_AVAILABLE,
+                                python_version=sys.version.split()[0],
+                                tesseract_status="Available" if TESSERACT_AVAILABLE else "Not installed")
 
 @app.route('/status')
 def status():
-    """Health check endpoint"""
+    """Detailed status endpoint"""
+    try:
+        tesseract_version = subprocess.run(['tesseract', '--version'], 
+                                         capture_output=True, text=True, timeout=5)
+        tesseract_info = tesseract_version.stdout if tesseract_version.returncode == 0 else "Not found"
+    except:
+        tesseract_info = "Command failed"
+    
     status_info = {
         'status': 'running',
         'tesseract_available': TESSERACT_AVAILABLE,
         'python_version': sys.version,
-        'app_version': '1.0.0'
+        'tesseract_command_output': tesseract_info,
+        'path': os.environ.get('PATH', ''),
+        'cwd': os.getcwd()
     }
-    
-    if TESSERACT_AVAILABLE:
-        try:
-            status_info['tesseract_version'] = str(pytesseract.get_tesseract_version())
-            status_info['available_languages'] = pytesseract.get_languages()
-        except Exception as e:
-            status_info['tesseract_error'] = str(e)
     
     return jsonify(status_info)
 
@@ -512,12 +477,10 @@ def upload_files():
         for file in files:
             if file and file.filename:
                 try:
-                    # Save uploaded file
                     filename = file.filename
                     filepath = os.path.join('uploads', filename)
                     file.save(filepath)
                     
-                    # Process OCR
                     text = perform_ocr(filepath)
                     
                     results.append({
@@ -526,7 +489,6 @@ def upload_files():
                         'text': text
                     })
                     
-                    # Clean up
                     if os.path.exists(filepath):
                         os.remove(filepath)
                         
@@ -546,29 +508,26 @@ def upload_files():
 
 def perform_ocr(image_path):
     """Perform OCR on image file"""
-    if not TESSERACT_AVAILABLE:
+    if not TESSERACT_AVAILABLE or not pytesseract:
         raise Exception("Tesseract OCR ไม่พร้อมใช้งาน")
     
     try:
-        # Open and process image
         image = Image.open(image_path)
         
-        # Convert to RGB if necessary
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Perform OCR with Thai and English language support
-        text = pytesseract.image_to_string(
-            image, 
-            lang='eng+tha' if 'tha' in pytesseract.get_languages() else 'eng',
-            config='--oem 3 --psm 6'
-        )
+        # Try with different language combinations
+        try:
+            text = pytesseract.image_to_string(image, lang='tha+eng', config='--oem 3 --psm 6')
+        except:
+            try:
+                text = pytesseract.image_to_string(image, lang='eng', config='--oem 3 --psm 6')
+            except:
+                text = pytesseract.image_to_string(image)
         
         return text.strip()
         
-    except pytesseract.TesseractNotFoundError as e:
-        logger.error(f"Tesseract OCR Error: {e}")
-        raise Exception(f"OCR failed: Tesseract not found")
     except Exception as e:
         logger.error(f"OCR processing error: {e}")
         raise Exception(f"การประมวลผลภาพผิดพลาด: {str(e)}")
