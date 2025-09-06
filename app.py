@@ -1,206 +1,430 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template_string, request, jsonify
 import os
-import tempfile
-import pytesseract
-from PIL import Image
-import re
 import logging
-from datetime import datetime
-import base64
-from io import BytesIO
+from PIL import Image
+import pytesseract
+
+app = Flask(__name__)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file
+# Create uploads directory
+os.makedirs('uploads', exist_ok=True)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'}
+# Configure Tesseract path (for different environments)
+try:
+    # Try to find tesseract
+    import subprocess
+    tesseract_path = subprocess.check_output(['which', 'tesseract']).decode().strip()
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+    logger.info(f"Tesseract found at: {tesseract_path}")
+except Exception as e:
+    logger.warning(f"Could not find tesseract automatically: {e}")
+    # Common paths for different systems
+    possible_paths = [
+        '/usr/bin/tesseract',
+        '/usr/local/bin/tesseract',
+        'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            logger.info(f"Tesseract set to: {path}")
+            break
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR Image Upload</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 100%;
+            backdrop-filter: blur(10px);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+        
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+            background: rgba(102, 126, 234, 0.05);
+        }
+        
+        .upload-area:hover {
+            border-color: #5a67d8;
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .upload-area.dragover {
+            border-color: #4c51bf;
+            background: rgba(102, 126, 234, 0.15);
+            transform: scale(1.02);
+        }
+        
+        .upload-icon {
+            font-size: 3rem;
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .upload-text {
+            font-size: 1.2rem;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .upload-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+        
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 10px;
+            border-left: 5px solid #667eea;
+        }
+        
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border-left-color: #ef4444;
+            color: #dc2626;
+        }
+        
+        .success {
+            background: rgba(34, 197, 94, 0.1);
+            border-left-color: #22c55e;
+            color: #16a34a;
+        }
+        
+        .preview-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .preview-image {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .ocr-result {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            color: #333;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .upload-area {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 OCR Image Reader</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">วางไฟล์ภาพที่นี่ หรือ คลิกเพื่อเลือกไฟล์</div>
+            <input type="file" class="file-input" id="fileInput" accept="image/*" multiple>
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+                เลือกไฟล์ภาพ
+            </button>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>กำลังประมวลผลภาพ...</p>
+        </div>
+        
+        <div id="results"></div>
+    </div>
 
-def clean_text(text):
-    """ลบช่องว่างซ้ำ + normalize"""
-    if not text:
-        return ""
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
 
-def calculate_age(dob_str):
-    """คำนวณอายุจาก DOB string"""
-    try:
-        dob = datetime.strptime(dob_str, '%d/%m/%Y')
-        today = datetime.today()
-        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        return age
-    except Exception as e:
-        logger.warning(f"Failed to parse DOB '{dob_str}': {e}")
-        return None
+        // Drag and drop functionality
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
 
-def guess_prefix(name, age):
-    """
-    เดาคำนำหน้าจากชื่อและอายุ
-    """
-    if not name:
-        return ""
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
 
-    name_upper = name.upper()
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            handleFiles(files);
+        });
 
-    # ตรวจสอบคำนำหน้าภาษาอังกฤษ
-    if "MR." in name_upper or "MR " in name_upper:
-        return "นาย"
-    if "MRS." in name_upper or "MRS " in name_upper:
-        return "นาง"
-    if "MISS" in name_upper:
-        return "นางสาว"
-    if "MS." in name_upper or "MS " in name_upper:
-        return "นางสาว"
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
 
-    # ถ้าไม่มี → ใช้การเดาจากอายุ
-    if age is not None:
-        if age >= 30:
-            # เดาจากชื่อ — ถ้ามีคำว่า "BO", "MIN", "OO" → มักเป็นชาย
-            if any(x in name_upper for x in ["BO", "MIN", "OO", "TIN", "HTAY"]):
-                return "นาย"
-            else:
-                return "นาง"
-        else:
-            # อายุน้อย → ใช้ "นาย" หรือ "นางสาว"
-            if any(x in name_upper for x in ["BO", "MIN", "OO", "TIN", "HTAY"]):
-                return "นาย"
-            else:
-                return "นางสาว"
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            loading.style.display = 'block';
+            results.innerHTML = '';
+            
+            const formData = new FormData();
+            
+            for (let file of files) {
+                if (file.type.startsWith('image/')) {
+                    formData.append('files', file);
+                }
+            }
+            
+            if (formData.get('files')) {
+                uploadFiles(formData);
+            } else {
+                showError('กรุณาเลือกไฟล์ภาพที่ถูกต้อง');
+                loading.style.display = 'none';
+            }
+        }
 
-    # ถ้าเดาไม่ได้
-    return ""
+        async function uploadFiles(formData) {
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                loading.style.display = 'none';
+                
+                if (result.success) {
+                    showResults(result.data);
+                } else {
+                    showError(result.message || 'เกิดข้อผิดพลาดในการประมวลผล');
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                showError('เกิดข้อผิดพลาดในการเชื่อมต่อ: ' + error.message);
+            }
+        }
 
-def extract_fields(text):
-    """
-    ดึงชื่อและ DOB จากข้อความ OCR — รองรับหลายรูปแบบ
-    """
-    if not text:
-        return {"name": "", "dob": "", "age": None, "prefix": ""}
+        function showResults(data) {
+            let html = '<div class="result success">';
+            html += '<h3>✅ ผลลัพธ์การอ่านข้อความจากภาพ</h3>';
+            
+            data.forEach((item, index) => {
+                html += '<div class="preview-container">';
+                html += `<h4>📄 ไฟล์: ${item.filename}</h4>`;
+                if (item.success) {
+                    if (item.text.trim()) {
+                        html += '<div class="ocr-result">' + escapeHtml(item.text) + '</div>';
+                    } else {
+                        html += '<div class="ocr-result">ไม่พบข้อความในภาพนี้</div>';
+                    }
+                } else {
+                    html += '<div class="error">❌ ' + escapeHtml(item.error) + '</div>';
+                }
+                html += '</div>';
+            });
+            
+            html += '</div>';
+            results.innerHTML = html;
+        }
 
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    name = ""
-    dob = ""
+        function showError(message) {
+            results.innerHTML = `<div class="result error">
+                <h3>❌ เกิดข้อผิดพลาด</h3>
+                <p>${escapeHtml(message)}</p>
+            </div>`;
+        }
 
-    # หาบรรทัดที่เป็น DOB
-    for line in lines:
-        if re.match(r'^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}$', line):
-            dob = re.sub(r'[\.|-]', '/', line)  # แปลง . หรือ - เป็น /
-            continue
-        # ถ้าไม่ใช่ DOB → ถือว่าเป็นชื่อ
-        if not name and line:  # เก็บบรรทัดแรกที่ไม่ใช่ DOB
-            name = line
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
+'''
 
-    # ถ้ายังไม่เจอ DOB → ลองดูบรรทัดสุดท้าย
-    if not dob and len(lines) >= 2:
-        last_line = lines[-1]
-        if re.match(r'^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}$', last_line):
-            dob = re.sub(r'[\.|-]', '/', last_line)
-            name = lines[-2] if len(lines) > 1 else ""
-
-    # คำนวณอายุ
-    age = calculate_age(dob) if dob else None
-
-    # เดาคำนำหน้า
-    prefix = guess_prefix(name, age)
-
-    return {
-        'name': name,
-        'dob': dob,
-        'age': age,
-        'prefix': prefix
-    }
-
-def create_thumbnail_base64(image_path, size=(60, 60)):
-    """สร้าง thumbnail และแปลงเป็น base64"""
-    try:
-        img = Image.open(image_path)
-        img.thumbnail(size)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buffered = BytesIO()
-        img.save(buffered, format="JPEG")
-        return base64.b64encode(buffered.getvalue()).decode('utf-8')
-    except Exception as e:
-        logger.error(f"Error creating thumbnail: {e}")
-        return ""
-
-def call_tesseract_ocr(image_path):
-    """เรียก Tesseract OCR"""
-    try:
-        img = Image.open(image_path)
-        text = pytesseract.image_to_string(img, lang='eng+tha')
-        return text
-    except Exception as e:
-        logger.error(f"Tesseract OCR Error: {str(e)}")
-        raise Exception(f"OCR failed: {str(e)}")
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
     try:
         if 'files' not in request.files:
-            return jsonify({'error': 'No files part in request'}), 400
-
+            return jsonify({'success': False, 'message': 'ไม่พบไฟล์ที่อัปโหลด'})
+        
         files = request.files.getlist('files')
-        if not files or files[0].filename == '':
-            return jsonify({'error': 'No selected files'}), 400
-
-        extracted_data = []
-
+        if not files or all(f.filename == '' for f in files):
+            return jsonify({'success': False, 'message': 'ไม่ได้เลือกไฟล์'})
+        
+        results = []
+        
         for file in files:
-            if not allowed_file(file.filename):
-                logger.warning(f"Invalid file type: {file.filename}")
-                continue
-
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
-                    file.save(tmp.name)
-
-                    # สร้าง thumbnail
-                    thumbnail_b64 = create_thumbnail_base64(tmp.name)
-
-                    # OCR
-                    ocr_text = call_tesseract_ocr(tmp.name)
-                    cleaned_text = clean_text(ocr_text)
-                    logger.info(f"OCR Output ({file.filename}): {cleaned_text}")
-
-                    # ดึงข้อมูล
-                    fields = extract_fields(cleaned_text)
-
-                    extracted_data.append({
-                        'name': fields.get('name', ''),
-                        'prefix': fields.get('prefix', ''),
-                        'dob': fields.get('dob', ''),
-                        'age': fields.get('age', '—'),
-                        'sourceFile': file.filename,
-                        'thumbnail': thumbnail_b64
+            if file and file.filename:
+                try:
+                    # Save uploaded file
+                    filename = file.filename
+                    filepath = os.path.join('uploads', filename)
+                    file.save(filepath)
+                    
+                    # Process OCR
+                    text = perform_ocr(filepath)
+                    
+                    results.append({
+                        'filename': filename,
+                        'success': True,
+                        'text': text
                     })
-
-                    # ลบไฟล์ชั่วคราว
-                    os.unlink(tmp.name)
-
-            except Exception as e:
-                logger.error(f"Error processing {file.filename}: {str(e)}")
-                continue  # ข้ามไฟล์นี้ ไม่ให้ crash ทั้งระบบ
-
-        return jsonify(extracted_data)
-
+                    
+                    # Clean up
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing {file.filename}: {e}")
+                    results.append({
+                        'filename': file.filename,
+                        'success': False,
+                        'error': str(e)
+                    })
+        
+        return jsonify({'success': True, 'data': results})
+        
     except Exception as e:
-        logger.error(f"Unexpected server error: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
+        logger.error(f"Upload error: {e}")
+        return jsonify({'success': False, 'message': f'เกิดข้อผิดพลาด: {str(e)}'})
 
-@app.route('/')
-def index():
-    return app.send_static_file('index.html')
-
-# สร้างโฟลเดอร์ static ทุกครั้ง
-os.makedirs('static', exist_ok=True)
+def perform_ocr(image_path):
+    """Perform OCR on image file"""
+    try:
+        # Test if Tesseract is available
+        test_result = pytesseract.get_tesseract_version()
+        logger.info(f"Tesseract version: {test_result}")
+        
+        # Open and process image
+        image = Image.open(image_path)
+        
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Perform OCR with Thai and English language support
+        text = pytesseract.image_to_string(
+            image, 
+            lang='tha+eng',  # Support both Thai and English
+            config='--oem 3 --psm 6'  # Use LSTM OCR Engine with uniform text block
+        )
+        
+        return text.strip()
+        
+    except pytesseract.TesseractNotFoundError as e:
+        logger.error(f"Tesseract OCR Error: {e}")
+        raise Exception(f"OCR failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"OCR processing error: {e}")
+        raise Exception(f"การประมวลผลภาพผิดพลาด: {str(e)}")
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)  # ← debug=False
+    app.run(debug=True, host='0.0.0.0', port=5000)
